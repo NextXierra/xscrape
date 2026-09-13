@@ -1,0 +1,16 @@
+{
+  "name": "twitscrape",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "launch": "node launch.js",
+    "status": "node remote.js",
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "playwright-core": "^1.63.0"
+  }
+}
