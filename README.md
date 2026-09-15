@@ -56,8 +56,6 @@ node scrape.js "islam ala prabowo" 300 --exact
 node scrape.js "islam ala prabowo" 300 --exact --since 2026-09-01 --until 2026-09-02
 ```
 
-> **Catatan Tanggal:** Di Twitter, `until:` bersifat *eksklusif* (sampai jam 00:00 UTC hari tersebut). Untuk scrape tepat tanggal 1 September, gunakan `--since 2026-09-01 --until 2026-09-02`.
-
 File hasil scrape otomatis tersimpan di folder `output/`:
 ```text
 output/tweets_islam_ala_prabowo_2026-09-01_80_2026-09-15.xlsx
