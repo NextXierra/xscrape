@@ -7,7 +7,6 @@ Scraper Twitter/X via Microsoft Edge CDP. Output langsung ke Excel (`.xlsx`) den
 - **CDP Session:** Memakai Microsoft Edge profil lokal (`.edge-profile/`), login cukup sekali.
 - **Safety Limit:** Dibatasi maksimal 500 tweet per proses untuk keamanan akun.
 - **End-of-Timeline Fallback:** Berhenti otomatis jika tweet pada rentang waktu sudah habis (tanpa error).
-- **Anti-Duplikasi Real-time:** Otomatis mendeteksi tweet yang sudah pernah di-scrape dari proses sebelumnya agar tidak tersimpan ganda.
 - **Folder Output Rapi:** Semua file Excel disimpan ke folder `output/`.
 - **Merge & Deduplikasi:** Tersedia tool untuk menggabungkan banyak file harian menjadi 1 file Excel master unik.
 

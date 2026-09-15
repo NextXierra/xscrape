@@ -421,60 +421,6 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
-const HISTORY_FILE = path.join(__dirname, '.scraped_ids.json');
-
-async function loadExistingScrapedIds() {
-  const ids = new Set();
-  
-  if (fs.existsSync(HISTORY_FILE)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-      if (Array.isArray(data)) {
-        for (const id of data) ids.add(String(id));
-      }
-    } catch {}
-  }
-
-  // Scan folder output dan direktori root
-  const searchDirs = [OUTPUT_DIR, __dirname];
-  for (const dir of searchDirs) {
-    if (!fs.existsSync(dir)) continue;
-    const files = fs.readdirSync(dir).filter(f => f.startsWith('tweets_') && f.endsWith('.xlsx'));
-    for (const file of files) {
-      try {
-        const wb = new ExcelJS.Workbook();
-        await wb.xlsx.readFile(path.join(dir, file));
-        const ws = wb.getWorksheet(1);
-        if (ws) {
-          ws.eachRow((row, rowNumber) => {
-            if (rowNumber === 1) return;
-            const val = row.getCell(2).value;
-            if (val) ids.add(String(val));
-          });
-        }
-      } catch {}
-    }
-  }
-
-  try {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(Array.from(ids)), 'utf8');
-  } catch {}
-
-  return ids;
-}
-
-function updateScrapedHistory(newIds) {
-  try {
-    let ids = [];
-    if (fs.existsSync(HISTORY_FILE)) {
-      ids = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) || [];
-    }
-    const set = new Set(ids);
-    for (const id of newIds) set.add(String(id));
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(Array.from(set)), 'utf8');
-  } catch {}
-}
-
 async function saveToExcel(tweets, outputPath) {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Sheet1');
@@ -496,8 +442,6 @@ async function run() {
 
   let browser;
   try {
-    const previouslyScrapedIds = await loadExistingScrapedIds();
-
     browser = await chromium.connectOverCDP(CONFIG.cdpUrl);
     const context = browser.contexts()[0];
     if (!context) {
@@ -522,10 +466,7 @@ async function run() {
 
             for (const raw of foundRawTweets) {
               const parsed = extractExact186Row(raw);
-              if (parsed && parsed.id) {
-                if (previouslyScrapedIds.has(parsed.id) || tweetMap.has(parsed.id)) {
-                  continue;
-                }
+              if (parsed && parsed.id && !tweetMap.has(parsed.id)) {
                 tweetMap.set(parsed.id, parsed);
                 renderProgress(tweetMap.size, CONFIG.targetCount);
               }
@@ -619,7 +560,6 @@ async function run() {
     const outputPath = path.join(OUTPUT_DIR, filename);
 
     await saveToExcel(tweetsArray, outputPath);
-    updateScrapedHistory(tweetsArray.map(t => t.id));
 
     console.log(`[xscrape] Selesai: ${tweetsArray.length} tweet tersimpan -> output/${filename}\n`);
 
