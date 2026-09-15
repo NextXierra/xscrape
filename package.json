@@ -7,7 +7,8 @@
   "scripts": {
     "launch": "node launch.js",
     "status": "node remote.js",
-    "scrape": "node scrape.js"
+    "scrape": "node scrape.js",
+    "merge": "node merge.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

@@ -17,6 +17,7 @@ function parseArgs() {
   let since = null;
   let until = null;
   let filter = 'live';
+  let isExact = false;
 
   const positional = [];
 
@@ -32,21 +33,44 @@ function parseArgs() {
       targetCount = parseInt(args[++i], 10) || 100;
     } else if (arg === '--query' || arg === '-q') {
       query = args[++i];
+    } else if (arg === '--exact' || arg === '-e') {
+      isExact = true;
     } else if (!arg.startsWith('-')) {
       positional.push(arg);
     }
   }
 
-  if (!query && positional[0]) query = positional[0];
-  if (positional[1] && !args.includes('--limit') && !args.includes('-l') && !args.includes('-n')) {
-    const parsed = parseInt(positional[1], 10);
-    if (!isNaN(parsed)) targetCount = parsed;
+  // Parse positional tokens intelligently
+  const queryTokens = [];
+  for (const token of positional) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(token)) {
+      if (!since) since = token;
+      else if (!until) until = token;
+    } else if (/^\d+$/.test(token) && !args.includes('--limit') && !args.includes('-l') && !args.includes('-n')) {
+      targetCount = parseInt(token, 10);
+    } else {
+      queryTokens.push(token);
+    }
   }
-  if (positional[2] && /^\d{4}-\d{2}-\d{2}$/.test(positional[2]) && !since) {
-    since = positional[2];
+
+  if (!query && queryTokens.length > 0) {
+    let joined = queryTokens.join(' ').trim();
+    // Detect if escaped quotes/backslashes were passed (e.g. from PowerShell \"phrase\")
+    if (/^(\\+"|\\"|\\|'|")/.test(joined) && /(\\"|\\|'|")$/.test(joined)) {
+      isExact = true;
+      joined = joined.replace(/^(\\+"|\\"|\\|'|")+/, '').replace(/(\\"|\\|'|")+$/, '').trim();
+    }
+    query = joined;
   }
-  if (positional[3] && /^\d{4}-\d{2}-\d{2}$/.test(positional[3]) && !until) {
-    until = positional[3];
+
+  if (isExact && query) {
+    const unquoted = query.replace(/^"+|"+$/g, '').trim();
+    query = `"${unquoted}"`;
+  }
+
+  const MAX_SAFE_LIMIT = 500;
+  if (targetCount > MAX_SAFE_LIMIT) {
+    targetCount = MAX_SAFE_LIMIT;
   }
 
   let finalQuery = query || 'genshin';
@@ -64,9 +88,10 @@ function parseArgs() {
     since,
     until,
     filter,
+    isExact,
     cdpUrl: 'http://127.0.0.1:9222',
     scrollDelayMs: 1800,
-    maxScrollAttempts: 200
+    maxScrollAttempts: 400
   };
 }
 
@@ -391,11 +416,69 @@ function findTweetsInObject(obj, found = []) {
   return found;
 }
 
+const OUTPUT_DIR = path.join(__dirname, 'output');
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+const HISTORY_FILE = path.join(__dirname, '.scraped_ids.json');
+
+async function loadExistingScrapedIds() {
+  const ids = new Set();
+  
+  if (fs.existsSync(HISTORY_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+      if (Array.isArray(data)) {
+        for (const id of data) ids.add(String(id));
+      }
+    } catch {}
+  }
+
+  // Scan folder output dan direktori root
+  const searchDirs = [OUTPUT_DIR, __dirname];
+  for (const dir of searchDirs) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir).filter(f => f.startsWith('tweets_') && f.endsWith('.xlsx'));
+    for (const file of files) {
+      try {
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.readFile(path.join(dir, file));
+        const ws = wb.getWorksheet(1);
+        if (ws) {
+          ws.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return;
+            const val = row.getCell(2).value;
+            if (val) ids.add(String(val));
+          });
+        }
+      } catch {}
+    }
+  }
+
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(Array.from(ids)), 'utf8');
+  } catch {}
+
+  return ids;
+}
+
+function updateScrapedHistory(newIds) {
+  try {
+    let ids = [];
+    if (fs.existsSync(HISTORY_FILE)) {
+      ids = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')) || [];
+    }
+    const set = new Set(ids);
+    for (const id of newIds) set.add(String(id));
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(Array.from(set)), 'utf8');
+  } catch {}
+}
+
 async function saveToExcel(tweets, outputPath) {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Sheet1');
 
-  // Set columns exactly as defined
   worksheet.columns = COLUMNS.map(c => ({ header: c, key: c }));
 
   for (const tweet of tweets) {
@@ -407,18 +490,18 @@ async function saveToExcel(tweets, outputPath) {
 
 async function run() {
   const searchUrl = `https://x.com/search?q=${encodeURIComponent(CONFIG.query)}&f=${CONFIG.filter}`;
-
-  console.log(`Query  : "${CONFIG.query}"`);
-  console.log(`Target : ${CONFIG.targetCount}`);
-  console.log(`Filter : ${CONFIG.filter}`);
-  console.log(`Search : ${searchUrl}\n`);
+  const rangeStr = (CONFIG.since || CONFIG.until) ? ` [${CONFIG.since || ''} .. ${CONFIG.until || ''}]` : '';
+  const displayQuery = (CONFIG.rawQuery || CONFIG.query).replace(/^"+|"+$/g, '');
+  console.log(`[xscrape] "${displayQuery}"${rangeStr} | Target: ${CONFIG.targetCount}`);
 
   let browser;
   try {
+    const previouslyScrapedIds = await loadExistingScrapedIds();
+
     browser = await chromium.connectOverCDP(CONFIG.cdpUrl);
     const context = browser.contexts()[0];
     if (!context) {
-      throw new Error('Edge connection failed: no browser context found.');
+      throw new Error('Koneksi Edge gagal: browser context tidak ditemukan.');
     }
 
     let page = context.pages().find(p => p.url().includes('x.com'));
@@ -439,7 +522,10 @@ async function run() {
 
             for (const raw of foundRawTweets) {
               const parsed = extractExact186Row(raw);
-              if (parsed && parsed.id && !tweetMap.has(parsed.id)) {
+              if (parsed && parsed.id) {
+                if (previouslyScrapedIds.has(parsed.id) || tweetMap.has(parsed.id)) {
+                  continue;
+                }
                 tweetMap.set(parsed.id, parsed);
                 renderProgress(tweetMap.size, CONFIG.targetCount);
               }
@@ -456,7 +542,8 @@ async function run() {
 
     let scrollAttempts = 0;
     let lastCount = 0;
-    let staleRounds = 0;
+    let consecutiveStale = 0;
+    let endOfTimeline = false;
 
     while (tweetMap.size < CONFIG.targetCount && scrollAttempts < CONFIG.maxScrollAttempts) {
       scrollAttempts++;
@@ -466,40 +553,82 @@ async function run() {
           top: window.innerHeight * 1.5,
           behavior: 'smooth'
         });
-      });
+      }).catch(() => {});
 
       await page.waitForTimeout(CONFIG.scrollDelayMs);
 
       if (tweetMap.size === lastCount) {
-        staleRounds++;
-        if (staleRounds >= 5) {
-          await page.evaluate(() => window.scrollBy(0, -300));
-          await page.waitForTimeout(800);
-          await page.evaluate(() => window.scrollBy(0, 1000));
-          staleRounds = 0;
+        consecutiveStale++;
+
+        const pageStatus = await page.evaluate(() => {
+          const text = document.body ? document.body.innerText : '';
+          const hasEmpty = text.includes('No results for') ||
+                           text.includes('No search results') ||
+                           text.includes('These results are up to date') ||
+                           text.includes('No Tweets found') ||
+                           text.includes('Tidak ada hasil untuk');
+          const hasError = text.includes('Something went wrong. Try reloading.') ||
+                           text.includes('Retry');
+          const isAtBottom = (window.innerHeight + window.scrollY) >= (document.documentElement.scrollHeight - 120);
+          return { hasEmpty, hasError, isAtBottom };
+        }).catch(() => ({ hasEmpty: false, hasError: false, isAtBottom: false }));
+
+        if (pageStatus.hasEmpty) {
+          endOfTimeline = true;
+          break;
+        }
+
+        // Coba scroll kejut / re-trigger jika sempat macet di ronde ke-3
+        if (consecutiveStale === 3) {
+          await page.evaluate(() => window.scrollBy(0, -400)).catch(() => {});
+          await page.waitForTimeout(600);
+          await page.evaluate(() => window.scrollBy(0, 800)).catch(() => {});
+        }
+
+        // Jika sudah mentok di ujung bawah halaman dan tidak ada tweet baru
+        if (pageStatus.isAtBottom && consecutiveStale >= 4) {
+          endOfTimeline = true;
+          break;
+        }
+
+        // Jika sudah 7 ronde scroll berturut-turut tanpa tweet baru
+        if (consecutiveStale >= 7) {
+          endOfTimeline = true;
+          break;
         }
       } else {
-        staleRounds = 0;
+        consecutiveStale = 0;
         lastCount = tweetMap.size;
       }
     }
 
     renderProgress(Math.min(tweetMap.size, CONFIG.targetCount), CONFIG.targetCount);
-    process.stdout.write('\n\n');
+    process.stdout.write('\n');
 
     const tweetsArray = Array.from(tweetMap.values()).slice(0, CONFIG.targetCount);
-    const sanitizedQuery = CONFIG.query.replace(/[^a-zA-Z0-9]/g, '_');
+
+    if (tweetsArray.length === 0) {
+      console.log(`[xscrape] Selesai: 0 tweet ditemukan.\n`);
+      return;
+    }
+
+    const sanitizedQuery = (CONFIG.rawQuery || CONFIG.query).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30);
+    const dateTag = CONFIG.since ? `_${CONFIG.since}` : '';
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const filename = `tweets_${sanitizedQuery}_${tweetsArray.length}_${timestamp}.xlsx`;
-    const outputPath = path.join(__dirname, filename);
+    const filename = `tweets_${sanitizedQuery}${dateTag}_${tweetsArray.length}_${timestamp}.xlsx`;
+    const outputPath = path.join(OUTPUT_DIR, filename);
 
     await saveToExcel(tweetsArray, outputPath);
+    updateScrapedHistory(tweetsArray.map(t => t.id));
 
-    console.log(`Saved: ${filename} (${tweetsArray.length} rows, 186 columns)`);
-    console.log(`Path : ${outputPath}`);
+    console.log(`[xscrape] Selesai: ${tweetsArray.length} tweet tersimpan -> output/${filename}\n`);
 
   } catch (err) {
-    console.error(`\nError: ${err.message}`);
+    if (err.message && err.message.includes('ECONNREFUSED')) {
+      console.error('\n[xscrape] Error: Microsoft Edge belum aktif. Jalankan `node launch.js` terlebih dahulu.\n');
+    } else {
+      console.error(`\n[xscrape] Error: ${err.message}\n`);
+    }
   } finally {
     if (browser) {
       await browser.close();

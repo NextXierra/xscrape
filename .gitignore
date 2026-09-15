@@ -1,6 +1,8 @@
 node_modules/
 .edge-profile/
+output/
 *.xlsx
+.scraped_ids.json
 .opencode/
 .DS_Store
 *.log
